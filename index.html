@@ -674,39 +674,47 @@ function resetGIFExport(){
   $('gifStatus').textContent='GIF는 앞면과 뒷면이 번갈아 보이는 반복 애니메이션이에요.';
   $('saveGIF').disabled=false;$('saveGIF').textContent='GIF로 저장 · 앞뒤 반복';
 }
-function gifPalette(front,back){
+// GIF uses a maximum of 256 colours per image. Use one local palette for each
+// side rather than blending the two card designs into a single colour table.
+function gifPalette(source,side='front'){
+  // Portrait photographs contain many more subtle colours than the card frame.
+  // Sample the ORIGINAL preview canvas, and give the actual photo area a
+  // stronger vote when building the GIF's limited 256-colour table.
   const hist=new Map();
-  const sampler=document.createElement('canvas');sampler.width=300;sampler.height=480;
+  const sampleW=375,sampleH=575;
+  const sampler=document.createElement('canvas');sampler.width=sampleW;sampler.height=sampleH;
   const sc=sampler.getContext('2d',{willReadFrequently:true});
-  for(const src of [front,back]){
-    sc.clearRect(0,0,300,480);sc.drawImage(src,0,0,300,480);
-    const data=sc.getImageData(0,0,300,480).data;
-    for(let y=0;y<480;y+=2){
-      for(let x=0;x<300;x+=2){
-        const i=(y*300+x)*4,r=data[i],g=data[i+1],b=data[i+2];
-        const k=((r>>3)<<10)|((g>>3)<<5)|(b>>3);
-        const item=hist.get(k);
-        if(item){item.n++;item.r+=r;item.g+=g;item.b+=b}
-        else hist.set(k,{n:1,r,g,b,cr:r,cg:g,cb:b});
-      }
+  sc.imageSmoothingEnabled=true;sc.imageSmoothingQuality='high';
+  sc.drawImage(source,0,0,sampleW,sampleH);
+  const data=sc.getImageData(0,0,sampleW,sampleH).data;
+  const photo=side==='front'?(state.theme==='blue'
+    ?{x:124,y:196,w:502,h:584}:{x:135,y:291,w:480,h:478}):null;
+  for(let y=0;y<sampleH;y+=2){
+    for(let x=0;x<sampleW;x+=2){
+      const i=(y*sampleW+x)*4,r=data[i],g=data[i+1],b=data[i+2];
+      const inPhoto=photo&&x*2>=photo.x&&x*2<photo.x+photo.w&&y*2>=photo.y&&y*2<photo.y+photo.h;
+      const weight=inPhoto?6:1;
+      const k=((r>>2)<<12)|((g>>2)<<6)|(b>>2);
+      const item=hist.get(k);
+      if(item){item.n+=weight;item.r+=r*weight;item.g+=g*weight;item.b+=b*weight}
+      else hist.set(k,{n:weight,r:r*weight,g:g*weight,b:b*weight});
     }
   }
-  for(const rgb of [[245,244,238],[247,246,241],[255,255,255],[36,58,97],[93,112,91],[70,79,86]]){
-    let [r,g,b]=rgb,k=((r>>3)<<10)|((g>>3)<<5)|(b>>3);
-    let item=hist.get(k);
-    if(item){item.n+=180;item.r+=r*180;item.g+=g*180;item.b+=b*180}
-    else hist.set(k,{n:180,r:r*180,g:g*180,b:b*180,cr:r,cg:g,cb:b});
-  }
+  // Keep brand shades exact; devote the remaining palette primarily to the photo.
+  const c=activeColors();
+  const protectedHex=[c.main,c.deep,c.ink,c.soft,c.paper,'#f5f4ee','#ffffff','#e5e6de','#cbd0c5'];
+  const fixed=[],used=new Set();
+  for(const hex of protectedHex){const rgb=hexRGB(hex),key=rgb.join(',');if(!used.has(key)){fixed.push(rgb);used.add(key)}}
   const points=Array.from(hist.values()).map(x=>({...x,cr:x.r/x.n,cg:x.g/x.n,cb:x.b/x.n}));
   const range=pts=>{
-    let min=[255,255,255],max=[0,0,0],n=0;
-    for(const p of pts){n+=p.n;min[0]=Math.min(min[0],p.cr);min[1]=Math.min(min[1],p.cg);min[2]=Math.min(min[2],p.cb);max[0]=Math.max(max[0],p.cr);max[1]=Math.max(max[1],p.cg);max[2]=Math.max(max[2],p.cb)}
+    const min=[255,255,255],max=[0,0,0];let n=0;
+    for(const v of pts){n+=v.n;min[0]=Math.min(min[0],v.cr);min[1]=Math.min(min[1],v.cg);min[2]=Math.min(min[2],v.cb);max[0]=Math.max(max[0],v.cr);max[1]=Math.max(max[1],v.cg);max[2]=Math.max(max[2],v.cb)}
     const span=max.map((v,i)=>v-min[i]);return {span,n,score:Math.max(...span)*(1+Math.log1p(n)/10)};
   };
   const boxes=[points];
-  while(boxes.length<256){
+  while(boxes.length<256-fixed.length){
     let best=-1,score=-1;
-    for(let i=0;i<boxes.length;i++)if(boxes[i].length>1){let v=range(boxes[i]).score;if(v>score){score=v;best=i}}
+    for(let i=0;i<boxes.length;i++)if(boxes[i].length>1){const v=range(boxes[i]).score;if(v>score){score=v;best=i}}
     if(best<0)break;
     const pts=boxes[best],stats=range(pts),channel=stats.span.indexOf(Math.max(...stats.span));
     const channelKey=['cr','cg','cb'][channel];pts.sort((a,b)=>a[channelKey]-b[channelKey]);
@@ -715,24 +723,41 @@ function gifPalette(front,back){
     cut=Math.max(1,Math.min(pts.length-1,cut));
     boxes[best]=pts.slice(0,cut);boxes.push(pts.slice(cut));
   }
-  const colors=[];
-  for(const points of boxes){let r=0,g=0,b=0,n=0;for(const p of points){r+=p.r;g+=p.g;b+=p.b;n+=p.n}colors.push([Math.round(r/n),Math.round(g/n),Math.round(b/n)])}
+  const colors=[...fixed];
+  for(const box of boxes){let r=0,g=0,b=0,n=0;for(const v of box){r+=v.r;g+=v.g;b+=v.b;n+=v.n}if(n)colors.push([Math.round(r/n),Math.round(g/n),Math.round(b/n)])}
   while(colors.length<256)colors.push(colors[colors.length-1]||[255,255,255]);
   const palette=new Uint8Array(768);
-  colors.forEach((rgb,i)=>{palette[i*3]=rgb[0];palette[i*3+1]=rgb[1];palette[i*3+2]=rgb[2]});
-  const lookup=new Int16Array(32768);lookup.fill(-1);
-  function quantize(data){
-    const out=new Uint8Array(data.length/4);
-    for(let i=0,j=0;i<data.length;i+=4,j++){
-      const r=data[i],g=data[i+1],b=data[i+2],key=((r>>3)<<10)|((g>>3)<<5)|(b>>3);
-      let chosen=lookup[key];
-      if(chosen<0){let dist=Infinity;for(let z=0;z<256;z++){
-        const dr=r-palette[z*3],dg=g-palette[z*3+1],db=b-palette[z*3+2];
-        const d=3*dr*dr+4*dg*dg+2*db*db;
-        if(d<dist){dist=d;chosen=z}}
-        lookup[key]=chosen;
+  colors.slice(0,256).forEach((rgb,i)=>{palette[i*3]=rgb[0];palette[i*3+1]=rgb[1];palette[i*3+2]=rgb[2]});
+  const lookup=new Int16Array(262144);lookup.fill(-1);
+  function nearest(r,g,b){
+    const key=((r>>2)<<12)|((g>>2)<<6)|(b>>2);
+    let chosen=lookup[key];
+    if(chosen<0){let dist=Infinity;for(let z=0;z<256;z++){
+      const dr=r-palette[z*3],dg=g-palette[z*3+1],db=b-palette[z*3+2];
+      const d=3*dr*dr+4*dg*dg+2*db*db;
+      if(d<dist){dist=d;chosen=z}
+    }lookup[key]=chosen}
+    return chosen;
+  }
+  function quantize(frame,subtlePhotoDither=false){
+    const out=new Uint8Array(frame.length/4);
+    // A tiny, spatially stable ordered dither avoids flat colour bands in skin,
+    // hair and shadows without adding visible grain to type or the card border.
+    const bayer=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5];
+    const W=480,H=760;
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+      const j=y*W+x,i=j*4;
+      let r=frame[i],g=frame[i+1],b=frame[i+2];
+      if(subtlePhotoDither&&photo){
+        const cardX=(x-48)/384*750,cardY=(y-85.5)/589*1150;
+        if(cardX>=photo.x&&cardX<=photo.x+photo.w&&cardY>=photo.y&&cardY<=photo.y+photo.h){
+          const n=(bayer[(y&3)*4+(x&3)]-7.5)*.48;
+          r=Math.max(0,Math.min(255,Math.round(r+n)));
+          g=Math.max(0,Math.min(255,Math.round(g+n)));
+          b=Math.max(0,Math.min(255,Math.round(b+n)));
+        }
       }
-      out[j]=chosen;
+      out[j]=nearest(r,g,b);
     }
     return out;
   }
@@ -764,7 +789,9 @@ function makeGIF(w,h,palette,frames){
   u8(0x21);u8(0xFF);u8(0x0B);ascii('NETSCAPE2.0');u8(3);u8(1);u16(0);u8(0);
   for(const frame of frames){
     u8(0x21);u8(0xF9);u8(4);u8(0x04);u16(Math.round(frame.delay/10));u8(0);u8(0);
-    u8(0x2C);u16(0);u16(0);u16(w);u16(h);u8(0);
+    u8(0x2C);u16(0);u16(0);u16(w);u16(h);u8(0x87);
+    // Local colour table: each side keeps its own original tones.
+    for(let i=0;i<frame.palette.length;i++)u8(frame.palette[i]);
     u8(8);
     const compressed=gifLZW(frame.pixels);
     for(let i=0;i<compressed.length;i+=255){let n=Math.min(255,compressed.length-i);u8(n);for(let j=i;j<i+n;j++)u8(compressed[j])}
@@ -816,9 +843,9 @@ async function createAnimatedGIF(){
     const ctx=frameCanvas.getContext('2d',{willReadFrequently:true});
     // Snapshot the two rendered canvases. GIF flips are export-only; the on-page card stays calm.
     const front=canvasFront,back=canvasBack;
-    const palette=gifPalette(front,back);
+    const frontPalette=gifPalette(front,'front'),backPalette=gifPalette(back,'back');
     const timeline=[];
-    // 2.5 seconds per side; smooth 0.63-second flips (no redundant hold frames).
+    // 1.5 seconds per side; smooth 0.63-second flips (no redundant hold frames).
     timeline.push({angle:0,delay:1500});
     for(let i=1;i<=9;i++)timeline.push({angle:180*(1-Math.cos(Math.PI*i/9))/2,delay:70});
     timeline.push({angle:180,delay:1500});
@@ -826,12 +853,13 @@ async function createAnimatedGIF(){
     const frames=[];
     for(let i=0;i<timeline.length;i++){
       gifDrawFace(ctx,front,back,timeline[i].angle);
-      const pixels=palette.quantize(ctx.getImageData(0,0,W,H).data);
-      frames.push({pixels,delay:timeline[i].delay});
+      const sidePalette=Math.cos(timeline[i].angle*Math.PI/180)>=0?frontPalette:backPalette;
+      const pixels=sidePalette.quantize(ctx.getImageData(0,0,W,H).data,timeline[i].angle===0);
+      frames.push({pixels,palette:sidePalette.palette,delay:timeline[i].delay});
       if(i%4===3){status.textContent=`앞·뒷면을 GIF로 합치는 중이에요 · ${Math.round((i+1)/timeline.length*90)}%`;await new Promise(resolve=>setTimeout(resolve,0))}
     }
     status.textContent='GIF 파일 마무리 중이에요 · 95%';await new Promise(resolve=>setTimeout(resolve,0));
-    const blob=makeGIF(W,H,palette.palette,frames);
+    const blob=makeGIF(W,H,frontPalette.palette,frames);
     gifObjectURL=URL.createObjectURL(blob);
     $('exportPreview').src=gifObjectURL;
     $('exportPreview').classList.remove('wide');
