@@ -195,6 +195,24 @@ body{background:#15283e;background-image:radial-gradient(circle at 85% 8%,#44648
 .stage[data-phase="eject"] .printer-slot{box-shadow:inset 0 2px 5px #13232aab,0 0 14px rgba(175,197,207,.65)}
 @media(prefers-reduced-motion:reduce){.printer.is-working .printer-rollers i,.print-diagnostic.show .diagnostic-card,.card-3d.sealing .surface-sweep::before{animation:none!important}}
 
+
+/* iOS WebKit: clip the actual 3D face texture, not just its rounded parent.
+   Without an explicit compositor clip, Safari can show square canvas corners. */
+.card-face{
+  border-radius:12px;
+  overflow:hidden;
+  -webkit-clip-path:inset(0 round 12px);
+  clip-path:inset(0 round 12px);
+  -webkit-backface-visibility:hidden;
+  backface-visibility:hidden;
+}
+.card-face canvas{
+  display:block;
+  width:100%;height:100%;
+  border-radius:12px;
+  -webkit-clip-path:inset(0 round 12px);
+  clip-path:inset(0 round 12px);
+}
 </style>
 </head>
 <body>
@@ -338,7 +356,7 @@ const heritageEn='"Cormorant Garamond", Georgia, serif';
 function heritageFace(value){return /[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(String(value||''))?heritageKr:heritageEn}
 const canvasFront=$('frontCanvas'),canvasBack=$('backCanvas');
 let workingTimer=[],toastTimer=null,modalUrl=null,activeAudio=null;
-const SOUND_BOOST=3;
+const SOUND_BOOST=7.5; // Previous 3x setting raised by 2.5x for all issuance sounds.
 function rect(c,x,y,w,h,color){c.fillStyle=color;c.fillRect(x,y,w,h)}
 function rr(c,x,y,w,h,r=12){let a=Math.min(r,w/2,h/2);c.beginPath();c.moveTo(x+a,y);c.lineTo(x+w-a,y);c.quadraticCurveTo(x+w,y,x+w,y+a);c.lineTo(x+w,y+h-a);c.quadraticCurveTo(x+w,y+h,x+w-a,y+h);c.lineTo(x+a,y+h);c.quadraticCurveTo(x,y+h,x,y+h-a);c.lineTo(x,y+a);c.quadraticCurveTo(x,y,x+a,y);c.closePath()}
 function fillRound(c,x,y,w,h,r,color){rr(c,x,y,w,h,r);c.fillStyle=color;c.fill()}
@@ -527,8 +545,8 @@ function acceptFile(file){if(!file)return;if(!file.type.startsWith('image/')){to
 $('photoInput').addEventListener('change',e=>acceptFile(e.target.files?.[0]));const upload=$('uploadZone');['dragenter','dragover'].forEach(ev=>upload.addEventListener(ev,e=>{e.preventDefault();upload.classList.add('dragover')}));['dragleave','drop'].forEach(ev=>upload.addEventListener(ev,e=>{e.preventDefault();upload.classList.remove('dragover')}));upload.addEventListener('drop',e=>acceptFile(e.dataTransfer?.files?.[0]));
 // Synthetic motor and ribbon cues. Nothing downloaded: Web Audio only, and only after a user click.
 function audioContext(){if(!state.sound)return null;try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return null;if(!activeAudio)activeAudio=new C();activeAudio.resume?.();return activeAudio}catch(_){return null}}
-function tone(f=600,d=.09,volume=.03,type='sine',when=0){const a=audioContext();if(!a)return;try{const start=a.currentTime+when,o=a.createOscillator(),g=a.createGain(),boosted=Math.min(Math.max(volume*SOUND_BOOST,0),.18);o.type=type;o.frequency.setValueAtTime(f,start);o.frequency.exponentialRampToValueAtTime(Math.max(100,f*.83),start+d);g.gain.setValueAtTime(.0001,start);g.gain.exponentialRampToValueAtTime(boosted,start+Math.min(.015,d/3));g.gain.exponentialRampToValueAtTime(.0001,start+d);o.connect(g);g.connect(a.destination);o.start(start);o.stop(start+d+.01)}catch(_){}}
-function motor(duration=.48,pitch=95,volume=.016){const a=audioContext();if(!a)return;try{const start=a.currentTime,o=a.createOscillator(),lfo=a.createOscillator(),lfoGain=a.createGain(),filter=a.createBiquadFilter(),g=a.createGain(),boosted=Math.min(Math.max(volume*SOUND_BOOST,0),.15);o.type='sawtooth';o.frequency.setValueAtTime(pitch,start);o.frequency.linearRampToValueAtTime(pitch+20,start+duration*.55);lfo.type='sine';lfo.frequency.value=17;lfoGain.gain.value=7;lfo.connect(lfoGain);lfoGain.connect(o.frequency);filter.type='lowpass';filter.frequency.value=230;g.gain.setValueAtTime(.0001,start);g.gain.linearRampToValueAtTime(boosted,start+.05);g.gain.setValueAtTime(boosted,start+Math.max(.06,duration-.09));g.gain.linearRampToValueAtTime(.0001,start+duration);o.connect(filter);filter.connect(g);g.connect(a.destination);o.start(start);lfo.start(start);o.stop(start+duration+.03);lfo.stop(start+duration+.03)}catch(_){}}
+function tone(f=600,d=.09,volume=.03,type='sine',when=0){const a=audioContext();if(!a)return;try{const start=a.currentTime+when,o=a.createOscillator(),g=a.createGain(),boosted=Math.min(Math.max(volume*SOUND_BOOST,0),.35);o.type=type;o.frequency.setValueAtTime(f,start);o.frequency.exponentialRampToValueAtTime(Math.max(100,f*.83),start+d);g.gain.setValueAtTime(.0001,start);g.gain.exponentialRampToValueAtTime(boosted,start+Math.min(.015,d/3));g.gain.exponentialRampToValueAtTime(.0001,start+d);o.connect(g);g.connect(a.destination);o.start(start);o.stop(start+d+.01)}catch(_){}}
+function motor(duration=.48,pitch=95,volume=.016){const a=audioContext();if(!a)return;try{const start=a.currentTime,o=a.createOscillator(),lfo=a.createOscillator(),lfoGain=a.createGain(),filter=a.createBiquadFilter(),g=a.createGain(),boosted=Math.min(Math.max(volume*SOUND_BOOST,0),.30);o.type='sawtooth';o.frequency.setValueAtTime(pitch,start);o.frequency.linearRampToValueAtTime(pitch+20,start+duration*.55);lfo.type='sine';lfo.frequency.value=17;lfoGain.gain.value=7;lfo.connect(lfoGain);lfoGain.connect(o.frequency);filter.type='lowpass';filter.frequency.value=230;g.gain.setValueAtTime(.0001,start);g.gain.linearRampToValueAtTime(boosted,start+.05);g.gain.setValueAtTime(boosted,start+Math.max(.06,duration-.09));g.gain.linearRampToValueAtTime(.0001,start+duration);o.connect(filter);filter.connect(g);g.connect(a.destination);o.start(start);lfo.start(start);o.stop(start+duration+.03);lfo.stop(start+duration+.03)}catch(_){}}
 function printClick(){tone(240,.038,.024,'triangle');tone(850,.047,.009,'sine',.026)}
 function chime(){tone(780,.21,.03,'sine');tone(1175,.3,.022,'sine',.09);tone(1560,.43,.011,'sine',.18)}
 function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
